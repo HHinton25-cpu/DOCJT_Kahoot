@@ -22,32 +22,47 @@
     return escapeHtml(value).replace(/`/g, '&#96;');
   }
 
-  function loadScript(src) {
-    return new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = src;
-      script.async = false;
-      script.onload = () => resolve(src);
-      script.onerror = () => reject(new Error(`Could not load ${src}`));
-      document.head.appendChild(script);
-    });
+  async function fetchText(src) {
+    const response = await fetch(src, { cache: 'no-store' });
+    if (!response.ok) {
+      throw new Error(`Could not load ${src} (${response.status})`);
+    }
+    return response.text();
+  }
+
+  function readQuestionBankFromCode(code) {
+    // Supports both common DOCJT formats:
+    //   const QUESTION_BANK = [...]
+    //   window.QUESTION_BANK = [...]
+    // GitHub Pages can load this from a local questions.js placed beside host.html.
+    const runner = new Function(`
+      const window = globalThis;
+      ${code}
+      if (typeof QUESTION_BANK !== 'undefined') return QUESTION_BANK;
+      if (typeof window.QUESTION_BANK !== 'undefined') return window.QUESTION_BANK;
+      if (typeof globalThis.QUESTION_BANK !== 'undefined') return globalThis.QUESTION_BANK;
+      return null;
+    `);
+    return runner();
   }
 
   async function loadQuestionBank(statusEl) {
     for (const src of QUESTION_SOURCES) {
       try {
         if (statusEl) statusEl.textContent = `Loading questions from ${src.includes('http') ? 'the live DOCJT site' : 'local questions.js'}…`;
-        await loadScript(src);
-        if (Array.isArray(window.QUESTION_BANK) && window.QUESTION_BANK.length) {
-          const bank = normalizeBank(window.QUESTION_BANK);
+        const code = await fetchText(src);
+        const rawBank = readQuestionBankFromCode(code);
+        if (Array.isArray(rawBank) && rawBank.length) {
+          const bank = normalizeBank(rawBank);
           if (statusEl) statusEl.textContent = `Loaded ${bank.length} questions.`;
           return { bank, source: src };
         }
+        throw new Error(`No QUESTION_BANK array found in ${src}`);
       } catch (err) {
         console.warn(err.message);
       }
     }
-    throw new Error('Could not load the DOCJT question bank. Keep an internet connection or place questions.js beside these files.');
+    throw new Error('Could not load the DOCJT question bank. Upload questions.js beside host.html, then open the site from GitHub Pages instead of opening the HTML file directly.');
   }
 
   function normalizeBank(raw) {

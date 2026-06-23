@@ -4,6 +4,9 @@
       "$pin": {
         ".read": "auth != null",
         ".write": "auth != null && !data.exists() && newData.child('hostUid').val() === auth.uid",
+        "updatedAt": {
+          ".write": "auth != null && auth.uid === data.parent().child('hostUid').val()"
+        },
         "settings": {
           ".write": "auth != null && auth.uid === data.parent().child('hostUid').val()"
         },
