@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Join DOCJT Live Quiz</title>
+  <meta name="description" content="Player screen for DOCJT Live Quiz." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+  <main id="app" class="player-shell">
+    <section class="screen active" id="join-screen">
+      <div class="hero-card compact">
+        <div class="brand-row">
+          <span class="brand-mark">⚡</span>
+          <div>
+            <p class="eyebrow">Player Screen</p>
+            <h1>Join DOCJT Quiz</h1>
+          </div>
+        </div>
+
+        <div id="firebase-warning" class="notice hidden">
+          Firebase is not configured yet. The host needs to paste Firebase settings into <code>firebase-config.js</code> first.
+        </div>
+
+        <label for="pin-input">Game PIN</label>
+        <input id="pin-input" class="pin-input" maxlength="6" inputmode="numeric" pattern="[0-9]*" placeholder="000000" autocomplete="one-time-code" />
+
+        <label for="name-input">Your name</label>
+        <input id="name-input" maxlength="24" placeholder="Nickname" autocomplete="name" />
+
+        <button class="primary-btn jumbo" id="join-game" type="button">Join Game</button>
+        <p id="join-status" class="status small"></p>
+      </div>
+    </section>
+
+    <section class="screen" id="lobby-screen">
+      <div class="player-card waiting-card">
+        <div class="pulse-dot"></div>
+        <p class="eyebrow">You’re in</p>
+        <h1 id="lobby-name">Player</h1>
+        <p>Waiting for the host to start…</p>
+        <div class="pill">PIN <span id="lobby-pin">000000</span></div>
+      </div>
+    </section>
+
+    <section class="screen" id="question-screen">
+      <header class="player-topbar">
+        <div>
+          <p class="eyebrow" id="player-round">Question</p>
+          <h2 id="player-score">0 pts</h2>
+        </div>
+        <div class="timer-circle" id="player-timer">30</div>
+      </header>
+      <section class="player-question-card">
+        <p id="player-category" class="eyebrow">Category</p>
+        <h1 id="player-question">Pick your answer</h1>
+      </section>
+      <section class="player-answers" id="player-answers"></section>
+      <p id="answer-status" class="status centered small"></p>
+    </section>
+
+    <section class="screen" id="answered-screen">
+      <div class="player-card waiting-card">
+        <div class="loader small-loader"></div>
+        <p class="eyebrow">Answer sent</p>
+        <h1>Waiting for everyone else…</h1>
+        <p id="answered-score">Score: 0</p>
+      </div>
+    </section>
+
+    <section class="screen" id="reveal-screen">
+      <div class="player-card result-card" id="player-result-card">
+        <div class="result-icon" id="player-result-icon">✓</div>
+        <p class="eyebrow" id="player-result-label">Correct</p>
+        <h1 id="player-gain">+0</h1>
+        <p id="player-correct-answer">Correct answer</p>
+        <div class="scoreboard-mini">
+          <span id="player-total-score">0 pts</span>
+          <span id="player-rank">Rank —</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" id="ended-screen">
+      <div class="player-card result-card">
+        <div class="trophy">🏆</div>
+        <p class="eyebrow">Game complete</p>
+        <h1 id="final-player-title">Nice work!</h1>
+        <div id="player-final-list" class="leaderboard-list"></div>
+        <a class="primary-btn" href="play.html">Join Another</a>
+      </div>
+    </section>
+  </main>
+
+  <script src="common.js"></script>
+  <script type="module" src="play.js"></script>
+</body>
+</html>
