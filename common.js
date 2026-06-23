@@ -160,9 +160,244 @@
     return Math.min(max, Math.max(min, number));
   }
 
+  function animateNumber(el, from, to, options = {}) {
+    if (!el) return;
+    const duration = Number(options.duration || 850);
+    const prefix = options.prefix || '';
+    const suffix = options.suffix || '';
+    const formatter = options.formatter || formatScore;
+    const onTick = typeof options.onTick === 'function' ? options.onTick : null;
+    const start = performance.now();
+    let lastTickBucket = -1;
+
+    const render = now => {
+      const progress = clamp((now - start) / duration, 0, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const value = Math.round(Number(from || 0) + (Number(to || 0) - Number(from || 0)) * eased);
+      el.textContent = `${prefix}${formatter(value)}${suffix}`;
+
+      const tickBucket = Math.floor(progress * 18);
+      if (onTick && tickBucket !== lastTickBucket && progress < 1) {
+        lastTickBucket = tickBucket;
+        onTick(value, progress);
+      }
+
+      if (progress < 1) requestAnimationFrame(render);
+      else el.textContent = `${prefix}${formatter(to)}${suffix}`;
+    };
+
+    requestAnimationFrame(render);
+  }
+
+  function createSoundEngine() {
+    let ctx = null;
+    let master = null;
+    let unlocked = false;
+    let muted = localStorage.getItem('docjtLiveMuted') === '1';
+    let musicTimer = null;
+    let currentMusic = '';
+    let musicStep = 0;
+    let lastCountdownSecond = null;
+    let backgroundTrack = null;
+    let backgroundTrackFailed = false;
+
+    function ensure() {
+      if (muted) return false;
+      const AudioCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtor) return false;
+      if (!ctx) {
+        ctx = new AudioCtor();
+        master = ctx.createGain();
+        master.gain.value = 0.22;
+        master.connect(ctx.destination);
+      }
+      if (ctx.state === 'suspended') ctx.resume();
+      unlocked = true;
+      return true;
+    }
+
+    function unlock() {
+      const ok = ensure();
+      if (ok) beep(660, 0.055, 'sine', 0.018);
+      return ok;
+    }
+
+    function setMuted(value) {
+      muted = Boolean(value);
+      localStorage.setItem('docjtLiveMuted', muted ? '1' : '0');
+      if (muted) stopMusic();
+    }
+
+    function isMuted() {
+      return muted;
+    }
+
+    function beep(freq, duration = 0.12, type = 'sine', gain = 0.07, delay = 0) {
+      if (muted || !unlocked || !ctx || !master) return;
+      const now = ctx.currentTime + delay;
+      const osc = ctx.createOscillator();
+      const amp = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, now);
+      amp.gain.setValueAtTime(0.0001, now);
+      amp.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), now + 0.012);
+      amp.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      osc.connect(amp);
+      amp.connect(master);
+      osc.start(now);
+      osc.stop(now + duration + 0.03);
+    }
+
+    function gliss(from, to, duration = 0.22, type = 'sawtooth', gain = 0.045) {
+      if (muted || !unlocked || !ctx || !master) return;
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const amp = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(from, now);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(1, to), now + duration);
+      amp.gain.setValueAtTime(0.0001, now);
+      amp.gain.exponentialRampToValueAtTime(gain, now + 0.018);
+      amp.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      osc.connect(amp);
+      amp.connect(master);
+      osc.start(now);
+      osc.stop(now + duration + 0.04);
+    }
+
+    function chord(freqs, duration = 0.26, type = 'triangle', gain = 0.045) {
+      freqs.forEach((freq, i) => beep(freq, duration, type, gain / Math.max(1, freqs.length), i * 0.012));
+    }
+
+    function getBackgroundTrack() {
+      if (backgroundTrack || backgroundTrackFailed) return backgroundTrack;
+      try {
+        backgroundTrack = new Audio('audio/quiz-click-sprint.mp3');
+        backgroundTrack.loop = true;
+        backgroundTrack.preload = 'auto';
+        backgroundTrack.volume = 0.28;
+      } catch (err) {
+        backgroundTrackFailed = true;
+        backgroundTrack = null;
+      }
+      return backgroundTrack;
+    }
+
+    function startGeneratedMusic(mode) {
+      if (musicTimer) clearInterval(musicTimer);
+      musicTimer = null;
+      musicStep = 0;
+
+      if (mode === 'lobby') {
+        const notes = [392, 494, 587, 494, 440, 523, 659, 523];
+        musicTimer = setInterval(() => {
+          beep(notes[musicStep % notes.length], 0.09, 'triangle', 0.025);
+          musicStep += 1;
+        }, 560);
+      }
+
+      if (mode === 'question') {
+        const bass = [196, 196, 247, 196, 294, 247, 220, 247];
+        musicTimer = setInterval(() => {
+          const note = bass[musicStep % bass.length];
+          beep(note, 0.07, 'square', 0.018);
+          if (musicStep % 2 === 0) beep(note * 2, 0.045, 'triangle', 0.014, 0.08);
+          musicStep += 1;
+        }, 310);
+      }
+    }
+
+    function playMusic(mode) {
+      if (muted) return;
+      ensure();
+      if (!unlocked) return;
+      if (currentMusic === mode) {
+        if (backgroundTrack && !backgroundTrack.paused) return;
+        if (musicTimer) return;
+      }
+
+      stopMusic();
+      currentMusic = mode;
+
+      const track = getBackgroundTrack();
+      if (track && !backgroundTrackFailed) {
+        track.volume = mode === 'question' ? 0.30 : 0.22;
+        track.play().catch(() => {
+          backgroundTrackFailed = true;
+          startGeneratedMusic(mode);
+        });
+        return;
+      }
+
+      startGeneratedMusic(mode);
+    }
+
+    function stopMusic() {
+      if (musicTimer) clearInterval(musicTimer);
+      musicTimer = null;
+      if (backgroundTrack) {
+        backgroundTrack.pause();
+      }
+      currentMusic = '';
+    }
+
+    function countdownTick(second) {
+      if (!Number.isFinite(second) || second <= 0 || second > 5 || second === lastCountdownSecond) return;
+      lastCountdownSecond = second;
+      ensure();
+      const freq = second === 1 ? 880 : 520 + (5 - second) * 55;
+      beep(freq, 0.12, second === 1 ? 'square' : 'sine', second === 1 ? 0.09 : 0.055);
+    }
+
+    function resetCountdown() {
+      lastCountdownSecond = null;
+    }
+
+    function answerSent() {
+      ensure();
+      beep(700, 0.07, 'triangle', 0.06);
+      beep(990, 0.09, 'triangle', 0.045, 0.06);
+    }
+
+    function reveal(correct = true) {
+      ensure();
+      stopMusic();
+      if (correct) {
+        chord([523.25, 659.25, 783.99], 0.24, 'triangle', 0.09);
+        beep(1046.5, 0.16, 'sine', 0.05, 0.18);
+      } else {
+        beep(220, 0.16, 'sawtooth', 0.05);
+        beep(164.81, 0.18, 'sawtooth', 0.045, 0.15);
+      }
+    }
+
+    function pointsTick() {
+      ensure();
+      beep(1174.66, 0.035, 'triangle', 0.025);
+    }
+
+    function countUp() {
+      ensure();
+      gliss(440, 880, 0.22, 'triangle', 0.038);
+    }
+
+    function victory() {
+      ensure();
+      stopMusic();
+      const melody = [523.25, 659.25, 783.99, 1046.5, 987.77, 1046.5];
+      melody.forEach((note, i) => beep(note, 0.18, 'triangle', 0.055, i * 0.16));
+      setTimeout(() => chord([523.25, 659.25, 783.99, 1046.5], 0.55, 'triangle', 0.12), 840);
+    }
+
+    return {
+      unlock, setMuted, isMuted, playMusic, stopMusic, countdownTick, resetCountdown,
+      answerSent, reveal, pointsTick, countUp, victory
+    };
+  }
+
   window.LiveQuiz = {
     $, escapeHtml, escapeAttr, loadQuestionBank, shuffle, countBy, makePin, buildPlayerUrl,
     getParam, isFirebaseConfigured, rankPlayers, showScreen, setStatus, copyText, formatScore,
-    clamp, answerStyles, answerShapes
+    clamp, animateNumber, answerStyles, answerShapes, Sounds: createSoundEngine()
   };
 })();

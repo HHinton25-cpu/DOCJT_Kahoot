@@ -16,6 +16,10 @@ let unsubscribeGame = null;
 let timerId = null;
 let lastQuestionKey = '';
 let localAnswered = false;
+let lastPhase = '';
+let lastRevealAudioKey = '';
+let lastGainAnimationKey = '';
+let lastEndedAudioKey = '';
 
 const els = {};
 
@@ -44,7 +48,7 @@ function cacheElements() {
     'lobby-pin', 'player-round', 'player-score', 'player-timer', 'player-category',
     'player-question', 'player-answers', 'answer-status', 'answered-score', 'player-result-card',
     'player-result-icon', 'player-result-label', 'player-gain', 'player-correct-answer',
-    'player-total-score', 'player-rank', 'final-player-title', 'player-final-list'
+    'player-explanation', 'player-total-score', 'player-rank', 'final-player-title', 'player-final-list'
   ].forEach(id => {
     els[toCamel(id)] = $(id);
   });
@@ -76,6 +80,7 @@ async function initFirebase() {
 }
 
 async function joinGame() {
+  LQ.Sounds.unlock();
   if (!firebaseReady) return;
   const pin = els.pinInput.value.trim();
   const name = els.nameInput.value.trim().slice(0, 24);
@@ -138,6 +143,16 @@ function startGameListener() {
 
 function renderFromGame(game) {
   const phase = game.state?.phase || 'lobby';
+  if (phase !== lastPhase) {
+    lastPhase = phase;
+    if (phase === 'lobby') LQ.Sounds.playMusic('lobby');
+    if (phase === 'question') {
+      LQ.Sounds.resetCountdown();
+      LQ.Sounds.playMusic('question');
+    }
+    if (phase === 'reveal') LQ.Sounds.stopMusic();
+    if (phase === 'ended') LQ.Sounds.stopMusic();
+  }
   const qKey = game.question?.key || '';
   if (qKey && qKey !== lastQuestionKey) {
     lastQuestionKey = qKey;
@@ -193,7 +208,9 @@ function startTimer(endsAt) {
   cleanupTimer();
   const tick = () => {
     const remainingMs = Math.max(0, endsAt - Date.now());
-    els.playerTimer.textContent = Math.ceil(remainingMs / 1000);
+    const seconds = Math.ceil(remainingMs / 1000);
+    els.playerTimer.textContent = seconds;
+    LQ.Sounds.countdownTick(seconds);
     if (remainingMs <= 0) {
       cleanupTimer();
       localAnswered = true;
@@ -215,6 +232,7 @@ async function submitAnswer(choiceIndex) {
   if (index < 0 || liveGame.state?.phase !== 'question') return;
 
   localAnswered = true;
+  LQ.Sounds.answerSent();
   document.querySelectorAll('[data-choice-index]').forEach(btn => btn.disabled = true);
   LQ.setStatus(els.answerStatus, 'Answer sent!', 'ok');
   await set(ref(db, `${GAME_ROOT}/${joinedPin}/answers/${index}/${uid}`), {
@@ -242,15 +260,49 @@ function renderReveal(game) {
   els.playerResultCard.classList.toggle('wrong', !correct);
   els.playerResultIcon.textContent = correct ? '✓' : '×';
   els.playerResultLabel.textContent = correct ? 'Correct!' : 'Not this time';
-  els.playerGain.textContent = `+${LQ.formatScore(me.lastGain)} pts`;
   els.playerCorrectAnswer.textContent = `Correct answer: ${reveal.correctAnswer || ''}`;
-  els.playerTotalScore.textContent = `${LQ.formatScore(me.score)} pts`;
+  if (els.playerExplanation) els.playerExplanation.textContent = reveal.explanation || '';
   els.playerRank.textContent = rank ? `Rank ${rank}` : 'Rank —';
+
+  const gain = Number(me.lastGain || 0);
+  const total = Number(me.score || 0);
+  const revealKey = `${game.question?.key || ''}_${reveal.revealedAt || ''}`;
+  const shouldAnimate = revealKey && revealKey !== lastGainAnimationKey;
+
+  if (revealKey && revealKey !== lastRevealAudioKey) {
+    lastRevealAudioKey = revealKey;
+    LQ.Sounds.reveal(correct);
+    LQ.Sounds.countUp();
+  }
+
+  if (shouldAnimate) {
+    lastGainAnimationKey = revealKey;
+    LQ.animateNumber(els.playerGain, 0, gain, {
+      prefix: '+',
+      suffix: ' pts',
+      duration: 1000,
+      onTick: () => LQ.Sounds.pointsTick()
+    });
+    LQ.animateNumber(els.playerTotalScore, Math.max(0, total - gain), total, {
+      suffix: ' pts',
+      duration: 1000,
+      onTick: () => LQ.Sounds.pointsTick()
+    });
+  } else {
+    els.playerGain.textContent = `+${LQ.formatScore(gain)} pts`;
+    els.playerTotalScore.textContent = `${LQ.formatScore(total)} pts`;
+  }
+
   LQ.showScreen('reveal');
 }
 
 function renderEnded(game) {
   cleanupTimer();
+  const endedKey = `${game.state?.endedAt || 'ended'}`;
+  if (endedKey !== lastEndedAudioKey) {
+    lastEndedAudioKey = endedKey;
+    LQ.Sounds.victory();
+  }
   const ranked = LQ.rankPlayers(game.players || {});
   const myRank = ranked.findIndex(p => p.uid === uid) + 1;
   els.finalPlayerTitle.textContent = myRank ? `You finished #${myRank}` : 'Game ended';
@@ -269,6 +321,7 @@ function renderEnded(game) {
 
 window.addEventListener('beforeunload', () => {
   cleanupTimer();
+  LQ.Sounds.stopMusic();
   if (db && joinedPin && uid) {
     update(ref(db, `${GAME_ROOT}/${joinedPin}/players/${uid}`), {
       online: false,

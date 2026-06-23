@@ -373,3 +373,13 @@ select:focus, input:focus { border-color: var(--primary); box-shadow: 0 0 0 4px 
   .answer-bar-row { grid-template-columns: auto 1fr auto; }
   .answer-bar-row .bar-track { grid-column: 1 / -1; }
 }
+
+.result-explanation {
+  max-width: 44rem;
+  margin: .85rem auto 0;
+  padding: .85rem 1rem;
+  border-radius: 1rem;
+  background: rgba(109,61,246,.08);
+  color: var(--muted);
+  line-height: 1.45;
+}

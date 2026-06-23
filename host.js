@@ -17,7 +17,12 @@ let liveGame = null;
 let selectedQuestions = [];
 let activeQuestion = null;
 let timerId = null;
+let autoRevealTimer = null;
 let revealInProgress = false;
+let lastPhase = '';
+let lastRevealAudioKey = '';
+let lastRevealAnimationKey = '';
+let lastEndedAudioKey = '';
 
 const els = {};
 
@@ -109,6 +114,7 @@ async function initFirebase() {
 }
 
 async function createGame() {
+  LQ.Sounds.unlock();
   if (!firebaseReady) return;
   const settings = getSettings();
   selectedQuestions = selectQuestions(settings);
@@ -182,7 +188,9 @@ function startGameListener() {
   const cb = snapshot => {
     liveGame = snapshot.val();
     if (!liveGame) {
+      clearAutoReveal();
       cleanupTimer();
+      LQ.Sounds.stopMusic();
       LQ.showScreen('setup');
       return;
     }
@@ -194,6 +202,16 @@ function startGameListener() {
 
 function renderFromGame(game) {
   const phase = game.state?.phase || 'lobby';
+  if (phase !== lastPhase) {
+    lastPhase = phase;
+    if (phase === 'lobby') LQ.Sounds.playMusic('lobby');
+    if (phase === 'question') {
+      LQ.Sounds.resetCountdown();
+      LQ.Sounds.playMusic('question');
+    }
+    if (phase === 'reveal') LQ.Sounds.stopMusic();
+    if (phase === 'ended') LQ.Sounds.stopMusic();
+  }
   if (phase === 'lobby') renderLobbyPlayers(game);
   if (phase === 'question') renderQuestionProgress(game);
   if (phase === 'reveal') renderReveal(game);
@@ -218,13 +236,17 @@ function renderLobbyPlayers(game) {
 }
 
 async function startGame() {
+  LQ.Sounds.unlock();
   if (!gamePin || !selectedQuestions.length) return;
   await nextQuestion();
 }
 
 async function nextQuestion() {
+  LQ.Sounds.unlock();
+  clearAutoReveal();
   if (!gamePin) return;
   revealInProgress = false;
+  LQ.Sounds.resetCountdown();
   const currentIndex = Number(liveGame?.state?.questionIndex ?? -1);
   const nextIndex = currentIndex + 1;
   if (nextIndex >= selectedQuestions.length) {
@@ -268,6 +290,7 @@ async function nextQuestion() {
     }
   });
 
+  LQ.Sounds.playMusic('question');
   LQ.showScreen('question');
   startTimer(activeQuestion.endsAt, () => revealQuestion(false));
 }
@@ -278,7 +301,10 @@ function renderQuestionProgress(game) {
   const index = Number(state.questionIndex || 0);
   const total = Number(state.questionCount || selectedQuestions.length || 0);
   const answerCount = Object.keys(game.answers?.[index] || {}).length;
-  const playerCount = Object.keys(game.players || {}).length;
+  const playersObj = game.players || {};
+  const allPlayerCount = Object.keys(playersObj).length;
+  const activePlayerCount = Object.values(playersObj).filter(player => player?.online !== false).length || allPlayerCount;
+  const playerCount = activePlayerCount;
 
   els.roundLabel.textContent = `Question ${index + 1} / ${total}`;
   els.categoryLabel.textContent = q.category || 'Category';
@@ -294,7 +320,16 @@ function renderQuestionProgress(game) {
 
   LQ.showScreen('question');
   startTimer(Number(state.endsAt || Date.now()), () => revealQuestion(false));
+
+  if (playerCount > 0 && answerCount >= playerCount && !revealInProgress && !autoRevealTimer) {
+    cleanupTimer();
+    autoRevealTimer = setTimeout(() => {
+      autoRevealTimer = null;
+      revealQuestion(false);
+    }, 700);
+  }
 }
+
 
 function startTimer(endsAt, onDone) {
   cleanupTimer();
@@ -304,6 +339,7 @@ function startTimer(endsAt, onDone) {
     const seconds = Math.ceil(remainingMs / 1000);
     els.timerText.textContent = seconds;
     els.timerBar.style.width = `${LQ.clamp((remainingMs / totalMs) * 100, 0, 100)}%`;
+    LQ.Sounds.countdownTick(seconds);
     if (remainingMs <= 0) {
       cleanupTimer();
       onDone();
@@ -318,13 +354,20 @@ function cleanupTimer() {
   timerId = null;
 }
 
+function clearAutoReveal() {
+  if (autoRevealTimer) clearTimeout(autoRevealTimer);
+  autoRevealTimer = null;
+}
+
 async function revealQuestion(manual) {
+  clearAutoReveal();
   if (!gamePin || revealInProgress) return;
   const game = liveGame;
   const index = Number(game?.state?.questionIndex ?? -1);
   if (!game || game.state?.phase !== 'question' || index < 0) return;
   revealInProgress = true;
   cleanupTimer();
+  LQ.Sounds.stopMusic();
 
   const local = activeQuestion?.localIndex === index ? activeQuestion : rebuildActiveQuestion(index, game);
   if (!local) return;
@@ -402,33 +445,58 @@ function renderReveal(game) {
       </div>
     `;
   }).join('');
-  renderLeaderboard(els.leaderboardList, game.players || {});
+  const revealAudioKey = `${game.question?.key || ''}_${game.reveal?.revealedAt || ''}`;
+  const animateReveal = revealAudioKey && revealAudioKey !== lastRevealAnimationKey;
+  if (revealAudioKey && revealAudioKey !== lastRevealAudioKey) {
+    lastRevealAudioKey = revealAudioKey;
+    LQ.Sounds.reveal(true);
+    LQ.Sounds.countUp();
+  }
+  renderLeaderboard(els.leaderboardList, game.players || {}, { animate: animateReveal });
+  if (animateReveal) lastRevealAnimationKey = revealAudioKey;
   const currentIndex = Number(game.state?.questionIndex || 0);
   els.nextQuestion.textContent = currentIndex + 1 >= Number(game.state?.questionCount || selectedQuestions.length) ? 'Finish Game' : 'Next Question';
   LQ.showScreen('reveal');
 }
 
-function renderLeaderboard(container, playersObj) {
+function renderLeaderboard(container, playersObj, options = {}) {
   const players = LQ.rankPlayers(playersObj);
   if (!players.length) {
     container.innerHTML = '<p class="muted">No players joined.</p>';
     return;
   }
-  container.innerHTML = players.map((p, i) => `
-    <div class="leader-row ${i === 0 ? 'first' : ''}">
-      <div class="rank">${i + 1}</div>
-      <div class="leader-name">
-        <strong>${LQ.escapeHtml(p.name || 'Player')}</strong>
-        <span>${Number(p.correct || 0)} correct · streak ${Number(p.streak || 0)}</span>
+  const animate = Boolean(options.animate);
+  container.innerHTML = players.map((p, i) => {
+    const targetScore = Number(p.score || 0);
+    const startScore = animate ? Math.max(0, targetScore - Number(p.lastGain || 0)) : targetScore;
+    return `
+      <div class="leader-row ${i === 0 ? 'first' : ''}">
+        <div class="rank">${i + 1}</div>
+        <div class="leader-name">
+          <strong>${LQ.escapeHtml(p.name || 'Player')}</strong>
+          <span>${Number(p.correct || 0)} correct · streak ${Number(p.streak || 0)}${Number(p.lastGain || 0) ? ` · +${LQ.formatScore(p.lastGain)} pts` : ''}</span>
+        </div>
+        <div class="leader-score" data-from-score="${startScore}" data-to-score="${targetScore}">${LQ.formatScore(startScore)} pts</div>
       </div>
-      <div class="leader-score">${LQ.formatScore(p.score)} pts</div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
+
+  if (animate) {
+    container.querySelectorAll('[data-to-score]').forEach(el => {
+      LQ.animateNumber(el, Number(el.dataset.fromScore || 0), Number(el.dataset.toScore || 0), {
+        suffix: ' pts',
+        duration: 1000,
+        onTick: () => LQ.Sounds.pointsTick()
+      });
+    });
+  }
 }
 
 async function endGame() {
   if (!gamePin) return;
+  clearAutoReveal();
   cleanupTimer();
+  LQ.Sounds.stopMusic();
   await update(ref(db, `${GAME_ROOT}/${gamePin}`), {
     updatedAt: serverTimestamp(),
     'state/phase': 'ended',
@@ -438,6 +506,11 @@ async function endGame() {
 }
 
 function renderEnded(game) {
+  const endedKey = `${game.state?.endedAt || 'ended'}`;
+  if (endedKey !== lastEndedAudioKey) {
+    lastEndedAudioKey = endedKey;
+    LQ.Sounds.victory();
+  }
   const ranked = LQ.rankPlayers(game.players || {});
   els.winnerTitle.textContent = ranked[0] ? `${ranked[0].name || 'Winner'} wins!` : 'Game ended';
   renderLeaderboard(els.finalLeaderboard, game.players || {});
@@ -445,7 +518,9 @@ function renderEnded(game) {
 }
 
 window.addEventListener('beforeunload', () => {
+  clearAutoReveal();
   cleanupTimer();
+  LQ.Sounds.stopMusic();
 });
 
 function toCamel(id) {
