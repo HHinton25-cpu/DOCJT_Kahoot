@@ -177,12 +177,20 @@ function renderQuestion(game) {
   const me = game.players?.[uid] || {};
   const answer = getMyAnswer(game);
   const answered = localAnswered || Boolean(answer);
+  const eligible = isEligibleForCurrentQuestion(game);
 
   els.playerRound.textContent = `Question ${Number(state.questionIndex || 0) + 1} / ${Number(state.questionCount || 0)}`;
   els.playerScore.textContent = `${LQ.formatScore(me.score)} pts`;
   els.playerCategory.textContent = q.category || 'Category';
   els.playerQuestion.textContent = q.text || 'Pick your answer';
   els.answeredScore.textContent = `Score: ${LQ.formatScore(me.score)} pts`;
+
+  if (!eligible) {
+    LQ.setStatus(els.answerStatus, 'You joined during this question. You will be able to answer the next one.', '');
+    LQ.showScreen('answered');
+    cleanupTimer();
+    return;
+  }
 
   if (answered) {
     LQ.showScreen('answered');
@@ -230,6 +238,11 @@ async function submitAnswer(choiceIndex) {
   if (!joinedPin || !liveGame || localAnswered) return;
   const index = Number(liveGame.state?.questionIndex ?? -1);
   if (index < 0 || liveGame.state?.phase !== 'question') return;
+  if (!isEligibleForCurrentQuestion(liveGame)) {
+    localAnswered = true;
+    LQ.showScreen('answered');
+    return;
+  }
 
   localAnswered = true;
   LQ.Sounds.answerSent();
@@ -241,6 +254,12 @@ async function submitAnswer(choiceIndex) {
     questionKey: liveGame.question?.key || ''
   });
   LQ.showScreen('answered');
+}
+
+function isEligibleForCurrentQuestion(game) {
+  const eligibleMap = game?.question?.eligiblePlayers;
+  if (!eligibleMap) return true;
+  return Boolean(eligibleMap[uid]);
 }
 
 function getMyAnswer(game) {

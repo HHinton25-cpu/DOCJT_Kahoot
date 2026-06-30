@@ -6,6 +6,8 @@ import { getDatabase, ref, set, update, get, onValue, off, remove, serverTimesta
 const LQ = window.LiveQuiz;
 const $ = LQ.$;
 
+let questionSets = [];
+let selectedSet = null;
 let bank = [];
 let db = null;
 let uid = null;
@@ -33,8 +35,9 @@ async function init() {
   wireEvents();
 
   try {
-    const loaded = await LQ.loadQuestionBank(els.loadStatus);
-    bank = loaded.bank;
+    questionSets = await LQ.loadQuestionSets(els.loadStatus);
+    selectedSet = questionSets[0] || null;
+    bank = selectedSet?.bank || [];
     renderSetup();
   } catch (err) {
     LQ.setStatus(els.loadStatus, err.message, 'error');
@@ -54,7 +57,7 @@ async function init() {
 
 function cacheElements() {
   [
-    'load-status', 'bank-pill', 'category-select', 'category-summary', 'question-count', 'timer-select',
+    'load-status', 'bank-pill', 'question-set-select', 'category-select', 'category-summary', 'question-count', 'timer-select',
     'shuffle-toggle', 'create-game', 'setup-status', 'firebase-warning', 'pin-display', 'copy-link',
     'join-url', 'join-qr', 'lobby-players', 'player-count-pill', 'start-game', 'round-label',
     'category-label', 'timer-bar', 'timer-text', 'answer-count', 'question-type', 'question-text',
@@ -68,6 +71,13 @@ function cacheElements() {
 
 function wireEvents() {
   els.createGame.addEventListener('click', createGame);
+  if (els.questionSetSelect) {
+    els.questionSetSelect.addEventListener('change', () => {
+      selectedSet = questionSets.find(set => set.id === els.questionSetSelect.value) || questionSets[0] || null;
+      bank = selectedSet?.bank || [];
+      renderSetup();
+    });
+  }
   els.copyLink.addEventListener('click', async () => {
     const ok = await LQ.copyText(playerUrl);
     els.copyLink.textContent = ok ? 'Copied!' : 'Copy failed';
@@ -82,7 +92,20 @@ function wireEvents() {
 }
 
 function renderSetup() {
-  els.bankPill.textContent = `${bank.length} questions loaded`;
+  if (!selectedSet && questionSets.length) selectedSet = questionSets[0];
+  bank = selectedSet?.bank || [];
+
+  if (els.questionSetSelect) {
+    els.questionSetSelect.innerHTML = questionSets.map(set =>
+      `<option value="${LQ.escapeAttr(set.id)}">${LQ.escapeHtml(set.label)} (${set.bank.length})</option>`
+    ).join('');
+    els.questionSetSelect.value = selectedSet?.id || questionSets[0]?.id || '';
+  }
+
+  els.bankPill.textContent = selectedSet
+    ? `${selectedSet.label}: ${bank.length} questions loaded`
+    : `${bank.length} questions loaded`;
+
   const categories = [...new Set(bank.map(q => q.category))].sort((a, b) => a.localeCompare(b));
   const counts = LQ.countBy(bank, q => q.category);
   els.categorySelect.innerHTML = `<option value="all">All categories (${bank.length})</option>` +
@@ -91,12 +114,13 @@ function renderSetup() {
   const scenarios = bank.filter(q => /scenario/i.test(q.type)).length;
   const recalls = bank.filter(q => /recall/i.test(q.type)).length;
   els.categorySummary.innerHTML = [
-    { value: bank.length, label: 'Questions' },
+    { value: questionSets.length || 1, label: 'Question Sets' },
+    { value: bank.length, label: 'Questions in Set' },
     { value: categories.length, label: 'Categories' },
     { value: `${recalls}/${scenarios}`, label: 'Recall / Scenario' }
   ].map(stat => `<div class="stat-card"><strong>${stat.value}</strong><span>${stat.label}</span></div>`).join('');
 
-  els.createGame.disabled = !firebaseReady;
+  els.createGame.disabled = !firebaseReady || !bank.length;
 }
 
 async function initFirebase() {
@@ -161,7 +185,11 @@ async function createGame() {
 }
 
 function getSettings() {
+  const questionSetId = els.questionSetSelect?.value || selectedSet?.id || 'docjt';
+  const sourceSet = questionSets.find(set => set.id === questionSetId) || selectedSet || questionSets[0] || { id: 'docjt', label: 'DOCJT Questions' };
   return {
+    questionSetId: sourceSet.id,
+    questionSetLabel: sourceSet.label,
     category: els.categorySelect.value,
     requestedCount: els.questionCount.value,
     timerSeconds: Number(els.timerSelect.value),
@@ -170,6 +198,8 @@ function getSettings() {
 }
 
 function selectQuestions(settings) {
+  selectedSet = questionSets.find(set => set.id === settings.questionSetId) || selectedSet || questionSets[0] || null;
+  bank = selectedSet?.bank || [];
   let pool = settings.category === 'all' ? [...bank] : bank.filter(q => q.category === settings.category);
   pool = LQ.shuffle(pool);
   const count = settings.requestedCount === 'all' ? pool.length : Math.min(Number(settings.requestedCount), pool.length);
@@ -260,6 +290,8 @@ async function nextQuestion() {
   const correctIndex = choices.findIndex(item => item.originalIndex === q.answer);
   const now = Date.now();
   const timerSeconds = Number(liveGame?.settings?.timerSeconds || 30);
+  const eligiblePlayerUids = Object.keys(liveGame?.players || {});
+  const eligiblePlayers = Object.fromEntries(eligiblePlayerUids.map(playerUid => [playerUid, true]));
   activeQuestion = {
     localIndex: nextIndex,
     question: q,
@@ -278,7 +310,9 @@ async function nextQuestion() {
       category: q.category,
       type: q.type,
       text: q.question,
-      choices: choices.map(item => item.choice)
+      choices: choices.map(item => item.choice),
+      eligiblePlayers,
+      eligibleCount: eligiblePlayerUids.length
     },
     state: {
       phase: 'question',
@@ -300,14 +334,23 @@ function renderQuestionProgress(game) {
   const state = game.state || {};
   const index = Number(state.questionIndex || 0);
   const total = Number(state.questionCount || selectedQuestions.length || 0);
-  const answerCount = Object.keys(game.answers?.[index] || {}).length;
-  const playersObj = game.players || {};
-  const allPlayerCount = Object.keys(playersObj).length;
-  const activePlayerCount = Object.values(playersObj).filter(player => player?.online !== false).length || allPlayerCount;
-  const playerCount = activePlayerCount;
+  const answersForQuestion = game.answers?.[index] || {};
+  const eligibleMap = q.eligiblePlayers || null;
+  const eligibleUids = eligibleMap ? Object.keys(eligibleMap) : [];
+  let playerCount = Number(q.eligibleCount || eligibleUids.length || 0);
+  let answerCount = eligibleUids.length
+    ? eligibleUids.filter(playerUid => answersForQuestion[playerUid]).length
+    : Object.keys(answersForQuestion).length;
+
+  if (!playerCount) {
+    playerCount = Object.keys(game.players || {}).length;
+  }
+  if (!q.eligiblePlayers && playerCount) {
+    answerCount = Object.keys(answersForQuestion).length;
+  }
 
   els.roundLabel.textContent = `Question ${index + 1} / ${total}`;
-  els.categoryLabel.textContent = q.category || 'Category';
+  els.categoryLabel.textContent = `${game.settings?.questionSetLabel || ''}${game.settings?.questionSetLabel ? ' · ' : ''}${q.category || 'Category'}`;
   els.questionType.textContent = q.type || 'Question';
   els.questionText.textContent = q.text || '';
   els.answerCount.textContent = `${answerCount} / ${playerCount} answered`;
@@ -321,6 +364,8 @@ function renderQuestionProgress(game) {
   LQ.showScreen('question');
   startTimer(Number(state.endsAt || Date.now()), () => revealQuestion(false));
 
+  // Only auto-reveal when the players who were locked in at question start have answered.
+  // This prevents a brief phone disconnect/offline flag from shrinking the player count and skipping early.
   if (playerCount > 0 && answerCount >= playerCount && !revealInProgress && !autoRevealTimer) {
     cleanupTimer();
     autoRevealTimer = setTimeout(() => {
@@ -370,7 +415,10 @@ async function revealQuestion(manual) {
   LQ.Sounds.stopMusic();
 
   const local = activeQuestion?.localIndex === index ? activeQuestion : rebuildActiveQuestion(index, game);
-  if (!local) return;
+  if (!local) {
+    revealInProgress = false;
+    return;
+  }
 
   const answers = game.answers?.[index] || {};
   const players = game.players || {};
@@ -390,7 +438,10 @@ async function revealQuestion(manual) {
     }
   };
 
+  const eligibleMap = game.question?.eligiblePlayers || null;
+
   Object.entries(players).forEach(([playerUid, player]) => {
+    if (eligibleMap && !eligibleMap[playerUid]) return;
     const answer = answers[playerUid];
     const answered = Boolean(answer);
     const correct = answered && Number(answer.choiceIndex) === local.correctIndex;

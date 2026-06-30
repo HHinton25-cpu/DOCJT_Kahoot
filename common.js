@@ -1,8 +1,13 @@
 (() => {
-  const QUESTION_SOURCES = [
+  const DEFAULT_QUESTION_SOURCES = [
     './questions.js',
     'https://hhinton25-cpu.github.io/DOCJT_EXAM/questions.js?v=75',
     'https://raw.githubusercontent.com/HHinton25-cpu/DOCJT_EXAM/refs/heads/main/questions.js'
+  ];
+
+  const REFINED_QUESTION_SOURCES = [
+    './refined_questions.js',
+    './refined-questions.js'
   ];
 
   const answerStyles = ['tile-red', 'tile-blue', 'tile-yellow', 'tile-green'];
@@ -31,38 +36,93 @@
   }
 
   function readQuestionBankFromCode(code) {
-    // Supports both common DOCJT formats:
+    // Supports the DOCJT format and refined-bank variants:
     //   const QUESTION_BANK = [...]
     //   window.QUESTION_BANK = [...]
-    // GitHub Pages can load this from a local questions.js placed beside host.html.
+    //   const REFINED_QUESTION_BANK = [...]
+    //   window.REFINED_QUESTION_BANK = [...]
+    //   export default [...]
+    let safeCode = String(code || '');
+    safeCode = safeCode.replace(/export\s+default\s+/g, 'const QUESTION_BANK = ');
     const runner = new Function(`
       const window = globalThis;
-      ${code}
+      ${safeCode}
+      if (typeof REFINED_QUESTION_BANK !== 'undefined') return REFINED_QUESTION_BANK;
       if (typeof QUESTION_BANK !== 'undefined') return QUESTION_BANK;
+      if (typeof window.REFINED_QUESTION_BANK !== 'undefined') return window.REFINED_QUESTION_BANK;
       if (typeof window.QUESTION_BANK !== 'undefined') return window.QUESTION_BANK;
+      if (typeof globalThis.REFINED_QUESTION_BANK !== 'undefined') return globalThis.REFINED_QUESTION_BANK;
       if (typeof globalThis.QUESTION_BANK !== 'undefined') return globalThis.QUESTION_BANK;
       return null;
     `);
     return runner();
   }
 
-  async function loadQuestionBank(statusEl) {
-    for (const src of QUESTION_SOURCES) {
+  async function tryLoadQuestionBank(sources, statusEl, options = {}) {
+    const label = options.label || 'question bank';
+    const required = options.required !== false;
+    const id = options.id || label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const errors = [];
+
+    for (const src of sources) {
       try {
-        if (statusEl) statusEl.textContent = `Loading questions from ${src.includes('http') ? 'the live DOCJT site' : 'local questions.js'}…`;
+        if (statusEl) {
+          const where = src.includes('http') ? 'the live DOCJT site' : src.replace(/^\.\//, '');
+          statusEl.textContent = `Loading ${label} from ${where}…`;
+        }
         const code = await fetchText(src);
         const rawBank = readQuestionBankFromCode(code);
         if (Array.isArray(rawBank) && rawBank.length) {
           const bank = normalizeBank(rawBank);
-          if (statusEl) statusEl.textContent = `Loaded ${bank.length} questions.`;
-          return { bank, source: src };
+          if (bank.length) {
+            return { id, label, bank, source: src };
+          }
         }
-        throw new Error(`No QUESTION_BANK array found in ${src}`);
+        throw new Error(`No usable question array found in ${src}`);
       } catch (err) {
+        errors.push(err.message);
         console.warn(err.message);
       }
     }
-    throw new Error('Could not load the DOCJT question bank. Upload questions.js beside host.html, then open the site from GitHub Pages instead of opening the HTML file directly.');
+
+    if (required) {
+      throw new Error(`Could not load ${label}. Upload questions.js beside host.html, then open the site from GitHub Pages instead of opening the HTML file directly.`);
+    }
+    return null;
+  }
+
+  async function loadQuestionBank(statusEl) {
+    const loaded = await tryLoadQuestionBank(DEFAULT_QUESTION_SOURCES, statusEl, {
+      id: 'docjt',
+      label: 'DOCJT question bank',
+      required: true
+    });
+    if (statusEl) statusEl.textContent = `Loaded ${loaded.bank.length} questions.`;
+    return loaded;
+  }
+
+  async function loadQuestionSets(statusEl) {
+    const sets = [];
+    const defaultSet = await tryLoadQuestionBank(DEFAULT_QUESTION_SOURCES, statusEl, {
+      id: 'docjt',
+      label: 'Original DOCJT Questions',
+      required: true
+    });
+    sets.push(defaultSet);
+
+    const refinedSet = await tryLoadQuestionBank(REFINED_QUESTION_SOURCES, statusEl, {
+      id: 'refined',
+      label: 'Refined Questions',
+      required: false
+    });
+    if (refinedSet) sets.push(refinedSet);
+
+    if (statusEl) {
+      const total = sets.reduce((sum, set) => sum + set.bank.length, 0);
+      const labels = sets.map(set => `${set.label}: ${set.bank.length}`).join(' · ');
+      statusEl.textContent = `Loaded ${total} questions across ${sets.length} set${sets.length === 1 ? '' : 's'}. ${labels}`;
+    }
+    return sets;
   }
 
   function normalizeBank(raw) {
@@ -396,7 +456,7 @@
   }
 
   window.LiveQuiz = {
-    $, escapeHtml, escapeAttr, loadQuestionBank, shuffle, countBy, makePin, buildPlayerUrl,
+    $, escapeHtml, escapeAttr, loadQuestionBank, loadQuestionSets, shuffle, countBy, makePin, buildPlayerUrl,
     getParam, isFirebaseConfigured, rankPlayers, showScreen, setStatus, copyText, formatScore,
     clamp, animateNumber, answerStyles, answerShapes, Sounds: createSoundEngine()
   };

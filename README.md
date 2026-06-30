@@ -1,20 +1,21 @@
-# DOCJT Live Kahoot
+# DOCJT Live Kahoot — Fixed Auto-Advance + Refined Question Set
 
-This is the Firebase live-join version of the DOCJT quiz game.
+This is the same DOCJT live Kahoot-style site you already tested successfully. It does **not** include the public quiz-creator feature.
 
 ## What changed in this version
 
-- Built-in game music using the browser audio engine. No MP3 files are needed.
-- Countdown beeps during the final 5 seconds.
-- Answer-sent sound on player phones.
-- Points count-up animation and points-tally sound effects.
-- Victory music at the end of the game.
-- The host now automatically moves to the answer/explanation screen once every currently online player has answered.
-- The player reveal screen also shows the explanation.
+- Fixed early skipping: each question now locks in the eligible player list when the question starts.
+- The host auto-reveals only when those locked-in players have answered, or when the timer reaches 0.
+- If a phone briefly disconnects, the player count will not shrink and accidentally skip the question.
+- Added a second selectable question bank: **Refined Questions**.
+- Added `refined_questions.js`, generated from your uploaded CSV.
+- Kept the custom background music at `audio/quiz-click-sprint.mp3`.
 
 ## Upload instructions
 
-Upload every file in this folder to the same GitHub Pages repo/folder:
+Upload all unzipped files to your GitHub Pages repository, replacing the old files.
+
+Important files:
 
 - `index.html`
 - `host.html`
@@ -26,32 +27,26 @@ Upload every file in this folder to the same GitHub Pages repo/folder:
 - `firebase-config.js`
 - `firebase-rules.json`
 - `questions.js`
-
-Do not upload only the ZIP file. Unzip first, then upload the contents.
+- `refined_questions.js`
+- `audio/quiz-click-sprint.mp3`
 
 ## Firebase
 
-If the previous version already worked, you do not need to change Firebase again for this audio/auto-advance update.
+You do **not** need to change your Firebase rules for this version if your previous DOCJT live Kahoot site was already working.
 
-Keep these enabled:
+## How to use
 
-1. Authentication → Anonymous sign-in: enabled
-2. Realtime Database: created
-3. Realtime Database rules: published
-
-## Use
-
-Host:
+Host page:
 
 `host.html`
 
-Players:
+Player page:
 
 `play.html`
 
-The browser may require one click before audio starts. Creating/joining/starting the game counts as that click.
+On the host setup screen, choose either:
 
+- Original DOCJT Questions
+- Refined Questions
 
-## Custom background audio
-
-This package includes your uploaded track at `audio/quiz-click-sprint.mp3`. The host and player pages use it as the looping lobby/question background music after the first user click unlocks browser audio. The built-in generated music remains as a fallback if the MP3 cannot load.
+Then choose category, number of questions, timer, and create the game PIN.
