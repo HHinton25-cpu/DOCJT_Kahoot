@@ -10,6 +10,11 @@
     './refined-questions.js'
   ];
 
+  const LEGAL_SCENARIOS_QUESTION_SOURCES = [
+    './legal_scenarios_questions.js',
+    './legal-scenarios-questions.js'
+  ];
+
   const answerStyles = ['tile-red', 'tile-blue', 'tile-yellow', 'tile-green'];
   const answerShapes = ['▲', '◆', '●', '■'];
 
@@ -47,10 +52,13 @@
     const runner = new Function(`
       const window = globalThis;
       ${safeCode}
+      if (typeof LEGAL_SCENARIOS_QUESTION_BANK !== 'undefined') return LEGAL_SCENARIOS_QUESTION_BANK;
       if (typeof REFINED_QUESTION_BANK !== 'undefined') return REFINED_QUESTION_BANK;
       if (typeof QUESTION_BANK !== 'undefined') return QUESTION_BANK;
+      if (typeof window.LEGAL_SCENARIOS_QUESTION_BANK !== 'undefined') return window.LEGAL_SCENARIOS_QUESTION_BANK;
       if (typeof window.REFINED_QUESTION_BANK !== 'undefined') return window.REFINED_QUESTION_BANK;
       if (typeof window.QUESTION_BANK !== 'undefined') return window.QUESTION_BANK;
+      if (typeof globalThis.LEGAL_SCENARIOS_QUESTION_BANK !== 'undefined') return globalThis.LEGAL_SCENARIOS_QUESTION_BANK;
       if (typeof globalThis.REFINED_QUESTION_BANK !== 'undefined') return globalThis.REFINED_QUESTION_BANK;
       if (typeof globalThis.QUESTION_BANK !== 'undefined') return globalThis.QUESTION_BANK;
       return null;
@@ -116,6 +124,13 @@
       required: false
     });
     if (refinedSet) sets.push(refinedSet);
+
+    const legalScenariosSet = await tryLoadQuestionBank(LEGAL_SCENARIOS_QUESTION_SOURCES, statusEl, {
+      id: 'legal-scenarios',
+      label: 'Legal Scenarios',
+      required: false
+    });
+    if (legalScenariosSet) sets.push(legalScenariosSet);
 
     if (statusEl) {
       const total = sets.reduce((sum, set) => sum + set.bank.length, 0);

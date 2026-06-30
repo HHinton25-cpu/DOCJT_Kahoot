@@ -1,52 +1,49 @@
-# DOCJT Live Kahoot — Fixed Auto-Advance + Refined Question Set
+# DOCJT Live Kahoot - 3 Question Banks
 
-This is the same DOCJT live Kahoot-style site you already tested successfully. It does **not** include the public quiz-creator feature.
+This version keeps the same host/player DOCJT Kahoot-style site and adds a third selectable question bank.
 
-## What changed in this version
+## Question bank options
 
-- Fixed early skipping: each question now locks in the eligible player list when the question starts.
-- The host auto-reveals only when those locked-in players have answered, or when the timer reaches 0.
-- If a phone briefly disconnects, the player count will not shrink and accidentally skip the question.
-- Added a second selectable question bank: **Refined Questions**.
-- Added `refined_questions.js`, generated from your uploaded CSV.
-- Kept the custom background music at `audio/quiz-click-sprint.mp3`.
+On `host.html`, use the **Question set** dropdown to choose:
+
+1. Original DOCJT Questions (`questions.js`)
+2. Refined Questions (`refined_questions.js`)
+3. Legal Scenarios (`legal_scenarios_questions.js`)
+
+## Early-skip fix
+
+The host now reads a fresh Firebase snapshot right before each question starts, then locks the eligible player roster for that exact question. Auto-reveal only happens when every locked-in player has submitted an answer for that exact question, or when the timer reaches zero.
+
+This prevents early skips caused by a stale host snapshot or a player briefly appearing offline.
 
 ## Upload instructions
 
-Upload all unzipped files to your GitHub Pages repository, replacing the old files.
-
-Important files:
-
-- `index.html`
-- `host.html`
-- `play.html`
-- `common.js`
-- `host.js`
-- `play.js`
-- `styles.css`
-- `firebase-config.js`
-- `firebase-rules.json`
-- `questions.js`
-- `refined_questions.js`
-- `audio/quiz-click-sprint.mp3`
+1. Unzip this package.
+2. Upload every file and folder inside it to your existing GitHub Pages repo.
+3. Replace the older files.
+4. Make sure these files are uploaded together:
+   - `questions.js`
+   - `refined_questions.js`
+   - `legal_scenarios_questions.js`
+   - `common.js`
+   - `host.js`
+   - `play.js`
+   - `host.html`
+   - `play.html`
+   - `firebase-config.js`
+   - `styles.css`
+   - `audio/quiz-click-sprint.mp3`
 
 ## Firebase
 
-You do **not** need to change your Firebase rules for this version if your previous DOCJT live Kahoot site was already working.
+No Firebase rule change is needed for this update if the previous DOCJT live Kahoot version was already working.
 
-## How to use
+## Use
 
-Host page:
+Host screen:
 
 `host.html`
 
-Player page:
+Player screen:
 
 `play.html`
-
-On the host setup screen, choose either:
-
-- Original DOCJT Questions
-- Refined Questions
-
-Then choose category, number of questions, timer, and create the game PIN.

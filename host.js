@@ -21,6 +21,7 @@ let activeQuestion = null;
 let timerId = null;
 let autoRevealTimer = null;
 let revealInProgress = false;
+let questionStartInProgress = false;
 let lastPhase = '';
 let lastRevealAudioKey = '';
 let lastRevealAnimationKey = '';
@@ -274,34 +275,46 @@ async function startGame() {
 async function nextQuestion() {
   LQ.Sounds.unlock();
   clearAutoReveal();
-  if (!gamePin) return;
+  if (!gamePin || questionStartInProgress) return;
+  questionStartInProgress = true;
   revealInProgress = false;
   LQ.Sounds.resetCountdown();
-  const currentIndex = Number(liveGame?.state?.questionIndex ?? -1);
-  const nextIndex = currentIndex + 1;
-  if (nextIndex >= selectedQuestions.length) {
-    await endGame();
-    return;
-  }
 
-  const q = selectedQuestions[nextIndex];
-  let choices = q.choices.map((choice, originalIndex) => ({ choice, originalIndex }));
-  if (liveGame?.settings?.shuffleAnswers ?? true) choices = LQ.shuffle(choices);
-  const correctIndex = choices.findIndex(item => item.originalIndex === q.answer);
-  const now = Date.now();
-  const timerSeconds = Number(liveGame?.settings?.timerSeconds || 30);
-  const eligiblePlayerUids = Object.keys(liveGame?.players || {});
-  const eligiblePlayers = Object.fromEntries(eligiblePlayerUids.map(playerUid => [playerUid, true]));
-  activeQuestion = {
-    localIndex: nextIndex,
-    question: q,
-    choices,
-    correctIndex,
-    startedAt: now,
-    endsAt: now + timerSeconds * 1000
-  };
+  try {
+    // Read a fresh game snapshot before locking the roster for the next question.
+    // This prevents early reveal caused by the host using a stale local snapshot that
+    // did not yet include every player who had joined the lobby.
+    const latestSnap = await get(ref(db, `${GAME_ROOT}/${gamePin}`));
+    if (latestSnap.exists()) liveGame = latestSnap.val();
 
-  await update(ref(db, `${GAME_ROOT}/${gamePin}`), {
+    const currentIndex = Number(liveGame?.state?.questionIndex ?? -1);
+    const nextIndex = currentIndex + 1;
+    if (nextIndex >= selectedQuestions.length) {
+      questionStartInProgress = false;
+      await endGame();
+      return;
+    }
+
+    const q = selectedQuestions[nextIndex];
+    let choices = q.choices.map((choice, originalIndex) => ({ choice, originalIndex }));
+    if (liveGame?.settings?.shuffleAnswers ?? true) choices = LQ.shuffle(choices);
+    const correctIndex = choices.findIndex(item => item.originalIndex === q.answer);
+    const now = Date.now();
+    const timerSeconds = Number(liveGame?.settings?.timerSeconds || 30);
+    const playersAtStart = liveGame?.players || {};
+    const eligiblePlayerUids = Object.keys(playersAtStart).filter(playerUid => playersAtStart[playerUid] && playersAtStart[playerUid].name);
+    const eligiblePlayers = Object.fromEntries(eligiblePlayerUids.map(playerUid => [playerUid, true]));
+    const eligiblePlayerNames = Object.fromEntries(eligiblePlayerUids.map(playerUid => [playerUid, String(playersAtStart[playerUid]?.name || 'Player')]));
+    activeQuestion = {
+      localIndex: nextIndex,
+      question: q,
+      choices,
+      correctIndex,
+      startedAt: now,
+      endsAt: now + timerSeconds * 1000
+    };
+
+    await update(ref(db, `${GAME_ROOT}/${gamePin}`), {
     updatedAt: serverTimestamp(),
     [`answers/${nextIndex}`]: null,
     reveal: null,
@@ -312,6 +325,7 @@ async function nextQuestion() {
       text: q.question,
       choices: choices.map(item => item.choice),
       eligiblePlayers,
+      eligiblePlayerNames,
       eligibleCount: eligiblePlayerUids.length
     },
     state: {
@@ -324,9 +338,12 @@ async function nextQuestion() {
     }
   });
 
-  LQ.Sounds.playMusic('question');
-  LQ.showScreen('question');
-  startTimer(activeQuestion.endsAt, () => revealQuestion(false));
+    LQ.Sounds.playMusic('question');
+    LQ.showScreen('question');
+    startTimer(activeQuestion.endsAt, () => revealQuestion(false));
+  } finally {
+    questionStartInProgress = false;
+  }
 }
 
 function renderQuestionProgress(game) {
@@ -337,16 +354,15 @@ function renderQuestionProgress(game) {
   const answersForQuestion = game.answers?.[index] || {};
   const eligibleMap = q.eligiblePlayers || null;
   const eligibleUids = eligibleMap ? Object.keys(eligibleMap) : [];
+  const questionKey = q.key || '';
   let playerCount = Number(q.eligibleCount || eligibleUids.length || 0);
-  let answerCount = eligibleUids.length
-    ? eligibleUids.filter(playerUid => answersForQuestion[playerUid]).length
-    : Object.keys(answersForQuestion).length;
+  let answeredEligibleUids = eligibleUids.length
+    ? eligibleUids.filter(playerUid => hasValidAnswer(answersForQuestion[playerUid], questionKey))
+    : Object.keys(answersForQuestion).filter(playerUid => hasValidAnswer(answersForQuestion[playerUid], questionKey));
+  let answerCount = answeredEligibleUids.length;
 
-  if (!playerCount) {
-    playerCount = Object.keys(game.players || {}).length;
-  }
-  if (!q.eligiblePlayers && playerCount) {
-    answerCount = Object.keys(answersForQuestion).length;
+  if (!playerCount && !eligibleUids.length) {
+    playerCount = Object.keys(game.players || {}).filter(playerUid => game.players[playerUid]?.name).length;
   }
 
   els.roundLabel.textContent = `Question ${index + 1} / ${total}`;
@@ -364,15 +380,25 @@ function renderQuestionProgress(game) {
   LQ.showScreen('question');
   startTimer(Number(state.endsAt || Date.now()), () => revealQuestion(false));
 
-  // Only auto-reveal when the players who were locked in at question start have answered.
-  // This prevents a brief phone disconnect/offline flag from shrinking the player count and skipping early.
-  if (playerCount > 0 && answerCount >= playerCount && !revealInProgress && !autoRevealTimer) {
+  // Only auto-reveal when the exact players locked in at question start have all answered
+  // this exact question. We do not shrink the roster when phones briefly disconnect, and we
+  // read a fresh Firebase snapshot before starting each question so newly joined lobby players
+  // are included before the lock is created.
+  const allLockedPlayersAnswered = playerCount > 0 && eligibleUids.length > 0 && eligibleUids.every(playerUid => hasValidAnswer(answersForQuestion[playerUid], questionKey));
+  const questionHasDisplayedBriefly = Date.now() - Number(state.startedAt || Date.now()) >= 1200;
+  if (allLockedPlayersAnswered && questionHasDisplayedBriefly && !revealInProgress && !autoRevealTimer) {
     cleanupTimer();
     autoRevealTimer = setTimeout(() => {
       autoRevealTimer = null;
       revealQuestion(false);
-    }, 700);
+    }, 900);
   }
+}
+
+function hasValidAnswer(answer, questionKey) {
+  if (!answer || typeof answer !== 'object') return false;
+  if (questionKey && answer.questionKey && answer.questionKey !== questionKey) return false;
+  return Number.isInteger(Number(answer.choiceIndex));
 }
 
 
